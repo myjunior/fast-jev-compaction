@@ -1,4 +1,4 @@
-import { compactMessages, reductionRatio, type Message } from '../src/index.js';
+import { compactMessages, reductionRatio, type Message } from '../plugin/src/index.js';
 
 let n = 0;
 function call(tool: string, input: Record<string, unknown>, output: string, isError = false): Message[] {

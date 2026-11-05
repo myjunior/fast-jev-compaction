@@ -3,11 +3,12 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
-} from '../hooks/fast-jev.ts';
-import { applyDecisions, collectToolCalls, decideCall, type Message } from '../src/index.js';
+} from '../plugin/hooks/fast-jev.ts';
+import { applyDecisions, collectToolCalls, decideCall, type Message } from '../plugin/src/index.js';
 
 type SessionMessage = Message & { handle?: string };
 
@@ -145,5 +146,45 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('register without a TypeSafe key', () => {
+  type Handler = ($: unknown, event: unknown, next: (e: unknown) => Promise<unknown>) => Promise<unknown>;
+
+  function registered() {
+    const handlers: Record<string, Handler> = {};
+    const on = (name: string, handler: Handler) => {
+      handlers[name] = handler;
+    };
+    (register as unknown as (on: unknown, options: unknown) => void)(on, {});
+    const calls: string[] = [];
+    const $ = {
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+      http: { fetch: async () => (calls.push('fetch'), { status: 200, ok: true, text: '{}' }) },
+      session: {
+        usage: async () => (calls.push('usage'), { context: { percent: 99 } }),
+        compact: async () => calls.push('compact'),
+      },
+      ui: { log: () => calls.push('log'), toast: () => calls.push('toast') },
+    };
+    return { handlers, $, calls };
+  }
+
+  it('passes session.compact to the built-in compactor silently', async () => {
+    const { handlers, $, calls } = registered();
+    const event = { messages: [] };
+    const result = await handlers['session.compact']!($, event, async (e) => ({ passed: e }));
+    expect(result).toEqual({ passed: event });
+    expect(calls).toEqual([]);
+  });
+
+  it('never requests an early compaction on turn.complete', async () => {
+    const { handlers, $, calls } = registered();
+    const event = { agentId: undefined };
+    const result = await handlers['turn.complete']!($, event, async (e) => ({ passed: e }));
+    expect(result).toEqual({ passed: event });
+    expect(calls).toEqual([]);
   });
 });

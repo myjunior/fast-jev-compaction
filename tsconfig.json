@@ -8,10 +8,10 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": "plugin/src",
     "noEmitOnError": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts"],
+  "include": ["plugin/src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

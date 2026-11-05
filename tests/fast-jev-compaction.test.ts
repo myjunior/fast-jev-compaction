@@ -18,7 +18,7 @@ import {
   type JevQuestions,
   type Message,
   type ToolCall,
-} from '../src/index.js';
+} from '../plugin/src/index.js';
 
 function message(role: Message['role'], text: string, extra: Partial<Message> = {}): Message {
   return { role, text, toolUses: [], ...extra };

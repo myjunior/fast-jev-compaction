@@ -1,15 +1,16 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "junior-fast-jev",
   "owner": {
-    "name": "tamaratran",
-    "url": "https://github.com/tamaratran"
+    "name": "myjunior",
+    "url": "https://github.com/myjunior"
   },
+  "description": "Junior's org-delivered build of fast-jev-compaction, forked from tamaratran/fast-jev-compaction.",
   "plugins": [
     {
       "name": "fast-jev-compaction",
-      "source": "./",
+      "source": "./plugin",
       "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "license": "MIT"
     }
   ]

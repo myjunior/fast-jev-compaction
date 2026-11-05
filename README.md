@@ -1,5 +1,10 @@
 # fast-jev-compaction
 
+> **Junior fork.** This fork ships the Claude Code plugin from `plugin/` so the
+> organization can deliver it through managed settings (`appendPlugins` plus a
+> pinned `pluginDigests` entry), which `cc-plugin-sec-default` does not bypass.
+> Without a TypeSafe key the hooks stay inert. See `docs/junior-org-delivery.md`.
+
 Claude Code plugin that replaces the compaction summary with Jev decisions:
 every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm

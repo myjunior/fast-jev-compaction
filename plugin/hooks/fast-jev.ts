@@ -260,9 +260,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
 
+  // The org enables this plugin for everyone; without a TypeSafe key it stays
+  // out of the way so compaction behaves exactly as built-in.
   on('session.compact', async ($, event, next) => {
+    const apiKey = await getApiKey($, configured).catch(() => undefined);
+    if (!apiKey) return next(event);
     try {
-      const config = { ...configured, apiKey: await getApiKey($, configured) };
+      const config = { ...configured, apiKey };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
@@ -292,6 +296,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (compacting) return next(event);
     try {
+      if (!(await getApiKey($, configured))) return next(event);
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
       compacting = true;
