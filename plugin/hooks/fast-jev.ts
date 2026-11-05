@@ -122,10 +122,23 @@ function toolResultSummary(result: ToolResult): ToolResultSummary {
 }
 
 /**
- * Maps the library's output back onto session messages. Whatever came back
- * unchanged (a message, a tool use, a tool result) is the engine's own object,
- * handle included; anything rebuilt is a fresh message without a handle, so the
- * engine takes the edited content instead of its original.
+ * Whether a kept message can go back with the engine's `handle`. Only a plain
+ * user message can. A kept tool_result row with its handle keeps a parentUuid
+ * behind the compact boundary, and a kept assistant row keeps its message.id,
+ * so `--resume` walks back into the full pre-compaction history or repeats a
+ * server_tool_use id (upstream #89, #129, #145; anthropics/claude-code#95328).
+ * Rebuilt rows keep their text and tool pairs but lose hidden reasoning and
+ * images inside tool results.
+ */
+function keepsHandle(message: SessionMessage): boolean {
+  return message.role === 'user' && !message.toolResults?.length;
+}
+
+/**
+ * Maps the library's output back onto session messages. A plain user message
+ * that came back unchanged is the engine's own object, handle included; every
+ * other message is a fresh copy without a handle (see `keepsHandle`), so the
+ * engine writes it as a new record after the compact boundary.
  */
 export function toSessionMessages(
   input: readonly SessionMessage[],
@@ -141,7 +154,7 @@ export function toSessionMessages(
   }
   return output.map((message) => {
     const own = messages.get(message);
-    if (own) return own;
+    if (own && keepsHandle(own)) return own;
     const rebuilt: SessionMessage = {
       role: message.role,
       text: message.text,
