@@ -191,11 +191,37 @@ describe('register without a TypeSafe key', () => {
     expect(calls).toEqual([]);
   });
 
+  it('does not reload plugins at session.start', async () => {
+    const { handlers, $, calls } = registered();
+    const commands: unknown[] = [];
+    const withCommand = { ...$, command: { run: async (c: unknown) => commands.push(c) } };
+    await handlers['session.start']!(withCommand, {}, async () => ({ cwd: '/' }));
+    expect(commands).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it('never requests an early compaction on turn.complete', async () => {
     const { handlers, $, calls } = registered();
     const event = { agentId: undefined };
     const result = await handlers['turn.complete']!($, event, async (e) => ({ passed: e }));
     expect(result).toEqual({ passed: event });
     expect(calls).toEqual([]);
+  });
+});
+
+describe('register with a TypeSafe key', () => {
+  it('reloads plugins once per load so the managed tier takes hold', async () => {
+    type Handler = ($: unknown, event: unknown, next: (e: unknown) => Promise<unknown>) => Promise<unknown>;
+    const handlers: Record<string, Handler> = {};
+    (register as unknown as (on: unknown, options: unknown) => void)(
+      (name: string, handler: Handler) => (handlers[name] = handler),
+      { apiKey: 'k' },
+    );
+    const commands: unknown[] = [];
+    const $ = { command: { run: async (c: unknown) => commands.push(c) }, ui: { log: () => {} } };
+    const next = async () => ({ cwd: '/' });
+    expect(await handlers['session.start']!($, {}, next)).toEqual({ cwd: '/' });
+    await handlers['session.start']!($, {}, next);
+    expect(commands).toEqual([{ command: 'reload-plugins' }]);
   });
 });

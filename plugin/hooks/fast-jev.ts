@@ -272,6 +272,21 @@ function notify(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
+  let reseated = false;
+
+  // Claude Code fixes a plugin's tier when it loads, sometimes before the managed
+  // settings fetch lands; then this plugin sits in the user tier and sec-default
+  // skips its session.compact. One /reload-plugins seats it in `append`.
+  on('session.start', async ($, event, next) => {
+    const result = await next(event);
+    if (!reseated && (await getApiKey($, configured).catch(() => undefined))) {
+      reseated = true;
+      $.command.run({ command: 'reload-plugins' }).catch((error: unknown) => {
+        $.ui.log(`reload skipped (${error instanceof Error ? error.message : String(error)})`);
+      });
+    }
+    return result;
+  });
 
   // The org enables this plugin for everyone; without a TypeSafe key it stays
   // out of the way so compaction behaves exactly as built-in.
