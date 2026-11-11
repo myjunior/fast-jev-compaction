@@ -169,6 +169,54 @@ export function toSessionMessages(
   });
 }
 
+/** A prompt typed or delivered while a turn ran; `after` is the last tool result it saw. */
+export type Delivery = { text: string; human: boolean; after?: string };
+
+/** The tool_use_id of the transcript's last tool result. */
+export function lastResultId(messages: readonly SessionMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const results = messages[i]!.toolResults;
+    if (results?.length) return results[results.length - 1]!.tool_use_id;
+  }
+  return undefined;
+}
+
+/**
+ * Puts mid-turn deliveries back as plain user messages. The engine keeps them
+ * as attachments that `session.compact` never lists, so a list handed back
+ * drops them (upstream #133). One arrives with the first tool results after
+ * `after`; one with none yet is still queued and comes back as `waiting`.
+ */
+export function withDeliveries(
+  messages: readonly SessionMessage[],
+  deliveries: readonly Delivery[],
+): { messages: SessionMessage[]; waiting: Delivery[] } {
+  const typed = messages
+    .filter((m) => m.role === 'user' && !m.toolResults?.length)
+    .map((m) => m.text);
+  const placed = new Map<number, SessionMessage[]>();
+  const waiting: Delivery[] = [];
+  for (const delivery of deliveries) {
+    if (typed.some((text) => text.includes(delivery.text))) continue; // it ran as its own turn
+    let at = 0;
+    if (delivery.after !== undefined) {
+      at = messages.findIndex((m) => m.toolResults?.some((r) => r.tool_use_id === delivery.after)) + 1;
+    }
+    // Anchor compacted away: keep the words, at the end, rather than lose them.
+    if (delivery.after !== undefined && at === 0) at = messages.length - 1;
+    else while (at < messages.length && !messages[at]!.toolResults?.length) at++;
+    if (at >= messages.length) {
+      waiting.push(delivery);
+      continue;
+    }
+    const text = delivery.human
+      ? `The user sent a new message while you were working:\n${delivery.text}`
+      : delivery.text;
+    placed.set(at, [...(placed.get(at) ?? []), { role: 'user', text, toolUses: [] }]);
+  }
+  return { messages: messages.flatMap((m, i) => [m, ...(placed.get(i) ?? [])]), waiting };
+}
+
 export type SessionCompaction = {
   result: CompactResult;
   messages: SessionMessage[];
@@ -273,6 +321,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
   let reseated = false;
+  let deliveries: Delivery[] = [];
 
   // Claude Code fixes a plugin's tier when it loads, sometimes before the managed
   // settings fetch lands; then this plugin sits in the user tier and sec-default
@@ -290,12 +339,47 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   // The org enables this plugin for everyone; without a TypeSafe key it stays
   // out of the way so compaction behaves exactly as built-in.
+  // A prompt typed or delivered mid-turn is invisible to session.compact; note
+  // where it arrived so the compaction can put it back (see withDeliveries).
+  on('prompt.submit', async ($, event, next) => {
+    if (!event.turnId || event.wait) return next(event);
+    if (!(await getApiKey($, configured).catch(() => undefined))) return next(event);
+    const after = await $.session.messages().then(lastResultId, () => undefined);
+    const result = await next(event);
+    if (result.text !== undefined) {
+      const human = event.origin.kind === 'composer' || event.origin.kind === 'bridge';
+      deliveries.push(after === undefined ? { text: result.text, human } : { text: result.text, human, after });
+    }
+    return result;
+  });
+
   on('session.compact', async ($, event, next) => {
     const apiKey = await getApiKey($, configured).catch(() => undefined);
     if (!apiKey) return next(event);
+    // A subagent's transcript never holds the main loop's deliveries.
+    const main = !event.agentId;
+    const seen = deliveries.length;
+    const { messages: input, waiting } = main
+      ? withDeliveries(event.messages, deliveries)
+      : { messages: [...event.messages], waiting: [] };
+    // Placed deliveries are in the new transcript (or the built-in summary);
+    // waiting ones now arrive after its last tool result.
+    const settle = (kept?: readonly SessionMessage[]): void => {
+      if (!main) return;
+      const after = kept && lastResultId(kept);
+      deliveries = [
+        ...waiting.map(({ text, human }) => (after === undefined ? { text, human } : { text, human, after })),
+        ...deliveries.slice(seen),
+      ];
+    };
+    const builtIn = async () => {
+      const compacted = await next(event);
+      if (!compacted.skip) settle();
+      return compacted;
+    };
     try {
       const config = { ...configured, apiKey };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
+      const { result, messages } = await compactSession(input, config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
@@ -305,19 +389,20 @@ export const register: Register = (on: On, options: PluginOptions) => {
           $,
           `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
         );
-        return next(event);
+        return builtIn();
       }
       notify(
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
       );
+      settle(messages);
       return { messages };
     } catch (error) {
       notify(
         $,
         `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,
       );
-      return next(event);
+      return builtIn();
     }
   });
 

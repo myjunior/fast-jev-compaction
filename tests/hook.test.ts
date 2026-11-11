@@ -3,10 +3,12 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  lastResultId,
   register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
+  withDeliveries,
 } from '../plugin/hooks/fast-jev.ts';
 import { applyDecisions, collectToolCalls, decideCall, type Message } from '../plugin/src/index.js';
 
@@ -118,6 +120,61 @@ describe('session message mapping', () => {
     expect(out[0]).toBe(messages[0]);
     expect(out[5]).toEqual({ role: 'assistant', text: 'Fixing now.', toolUses: [] });
     expect(out[4]?.toolResults).toEqual(messages[4]?.toolResults);
+  });
+});
+
+describe('mid-turn deliveries', () => {
+  it('places each after the first tool results past its anchor, waits when none yet', () => {
+    const messages = transcript();
+    const { messages: out, waiting } = withDeliveries(messages, [
+      { text: 'also the ids', human: true, after: 'tool-1' },
+      { text: '<task-notification>report</task-notification>', human: false },
+      { text: 'still queued', human: true, after: 'tool-2' },
+      { text: 'go ahead', human: true, after: 'tool-2' },
+      { text: 'anchor gone', human: true, after: 'tool-0' },
+    ]);
+    expect(out.map((m) => m.text)).toEqual([
+      'Fix the failing test.',
+      '',
+      '',
+      '<task-notification>report</task-notification>',
+      '',
+      '',
+      'The user sent a new message while you were working:\nalso the ids',
+      'Fixing now.',
+      'go ahead',
+      'The user sent a new message while you were working:\nanchor gone',
+    ]);
+    expect(waiting).toEqual([{ text: 'still queued', human: true, after: 'tool-2' }]);
+    expect(lastResultId(messages)).toBe('tool-2');
+  });
+
+  it('puts a prompt queued mid-turn back into the compacted transcript', async () => {
+    type Handler = ($: unknown, event: unknown, next: (e: unknown) => Promise<unknown>) => Promise<unknown>;
+    const handlers: Record<string, Handler> = {};
+    (register as unknown as (on: unknown, options: unknown) => void)(
+      (name: string, handler: Handler) => (handlers[name] = handler),
+      { apiKey: 'k', preserveRecentMessages: 1, minReductionRatio: 0 },
+    );
+    const before = transcript().slice(0, 2);
+    const $ = {
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+      session: { messages: async () => before },
+      http: { fetch: jevFetch(() => 0.9) },
+      ui: { log: () => {}, toast: () => {} },
+    };
+    const prompt = { text: 'QUEUED', turnId: 't', wait: false, origin: { kind: 'composer' } };
+    await handlers['prompt.submit']!($, prompt, async (e) => e);
+    const first = (await handlers['session.compact']!($, { messages: transcript() }, async () => {
+      throw new Error('built-in');
+    })) as { messages: SessionMessage[] };
+    expect(first.messages[3]?.text).toBe('The user sent a new message while you were working:\nQUEUED');
+    // Placed once: a later compaction sees it as an ordinary message.
+    const second = (await handlers['session.compact']!($, { messages: first.messages }, async () => {
+      throw new Error('built-in');
+    })) as { messages: SessionMessage[] };
+    expect(second.messages.filter((m) => m.text.includes('QUEUED'))).toHaveLength(1);
   });
 });
 
